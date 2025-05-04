@@ -495,6 +495,12 @@ export const SING_BOX_CONFIG = {
 		cache_file: {
 			enabled: true,
 			store_fakeip: true
+		},
+		clash_api: {
+		      	external_controller: '0.0.0.0:9090',
+		     	external_ui: 'yacd',
+		      	external_ui_download_url: 'https://gh.sageer.me/https://github.com/MetaCubeX/Yacd-meta/archive/refs/heads/gh-pages.zip',
+			secret: '123456'
 		}
 	}
 };
