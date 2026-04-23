@@ -273,13 +273,13 @@ export function createTlsConfig(params) {
 	if (params.security && params.security !== 'none') {
 		tls = {
 			enabled: true,
-			server_name: params.sni || params.host,
+			// SNI can be specified via: sni, peer, or host parameters
+			server_name: params.sni || params.peer || params.host,
 			insecure: !!params?.allowInsecure || !!params?.insecure || !!params?.allow_insecure,
-			// utls: {
-			//   enabled: true,
-			//   fingerprint: "chrome"
-			// },
 		};
+		if (params.alpn) {
+			tls.alpn = params.alpn.split(',');
+		}
 		if (params.security === 'reality') {
 			tls.reality = {
 				enabled: true,
