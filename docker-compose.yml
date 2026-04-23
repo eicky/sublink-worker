@@ -1,6 +1,6 @@
 services:
   worker:
-    image: ${SUBLINK_WORKER_IMAGE:-ghcr.io/7sageer/sublink-worker:latest}
+    image: ${SUBLINK_WORKER_IMAGE:-ghcr.io/eicky/sublink-worker:latest}
     pull_policy: always
     ports:
       - "8787:8787"
