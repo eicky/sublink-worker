@@ -58,6 +58,7 @@ function detectFormat(content) {
  * @returns {Promise<object|string[]|null>} - Parsed subscription content
  */
 export async function fetchSubscription(url, userAgent) {
+    console.log(`[sublink-debug] fetchSubscription(parse) url=${url} ua=${userAgent || '(none)'}`);
     try {
         const headers = new Headers();
         if (userAgent) {
@@ -67,15 +68,17 @@ export async function fetchSubscription(url, userAgent) {
             method: 'GET',
             headers: headers
         });
+        console.log(`[sublink-debug] fetchSubscription status=${response.status} ok=${response.ok}`);
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const text = await response.text();
         const decodedText = decodeContent(text);
+        console.log(`[sublink-debug] fetchSubscription decoded length=${decodedText.length} prefix=${JSON.stringify(decodedText.slice(0, 200))}`);
 
         return parseSubscriptionContent(decodedText);
     } catch (error) {
-        console.error('Error fetching or parsing HTTP(S) content:', error);
+        console.error(`[sublink-debug] fetchSubscription failed url=${url} name=${error?.name || typeof error} message=${error?.message || error}`);
         return null;
     }
 }
@@ -87,6 +90,7 @@ export async function fetchSubscription(url, userAgent) {
  * @returns {Promise<{content: string, format: 'clash'|'singbox'|'unknown', url: string, subscriptionUserinfo?: string}|null>}
  */
 export async function fetchSubscriptionWithFormat(url, userAgent) {
+    console.log(`[sublink-debug] fetchStart url=${url} ua=${userAgent || '(none)'}`);
     try {
         const headers = new Headers();
         if (userAgent) {
@@ -96,18 +100,21 @@ export async function fetchSubscriptionWithFormat(url, userAgent) {
             method: 'GET',
             headers: headers
         });
+        console.log(`[sublink-debug] fetchResp status=${response.status} ok=${response.ok} content-type=${response.headers.get('content-type') || '(none)'}`);
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const text = await response.text();
+        console.log(`[sublink-debug] rawText length=${text.length} prefix=${JSON.stringify(text.slice(0, 100))}`);
         const content = decodeContent(text);
         const format = detectFormat(content);
+        console.log(`[sublink-debug] decoded length=${content.length} format=${format} prefix=${JSON.stringify(content.slice(0, 200))}`);
 
         const subscriptionUserinfo = response.headers.get('subscription-userinfo') || undefined;
 
         return { content, format, url, subscriptionUserinfo };
     } catch (error) {
-        console.error('Error fetching subscription:', error);
+        console.error(`[sublink-debug] fetchFailed url=${url} name=${error?.name || typeof error} message=${error?.message || error}`);
         return null;
     }
 }

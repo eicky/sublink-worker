@@ -71,6 +71,7 @@ export function createApp(bindings = {}) {
     app.get('/singbox', async (c) => {
         try {
             const config = c.req.query('config');
+            console.log(`[sublink-debug] /singbox configLen=${config?.length || 0} configPrefix=${JSON.stringify((config || '').slice(0, 100))}`);
             if (!config) {
                 return c.text('Missing config parameter', 400);
             }
@@ -115,11 +116,13 @@ export function createApp(bindings = {}) {
             );
             await builder.build();
             const userinfo = builder.getSubscriptionUserinfo();
+            console.log(`[sublink-debug] /singbox proxies=${builder.getProxies()?.length || 0} providers=${builder.providerUrls?.length || 0}`);
             if (userinfo) {
                 c.header('subscription-userinfo', userinfo);
             }
             return c.json(builder.config);
         } catch (error) {
+            console.error(`[sublink-debug] /singbox error name=${error?.name} message=${error?.message}`);
             return handleError(c, error, runtime.logger);
         }
     });
@@ -163,12 +166,14 @@ export function createApp(bindings = {}) {
             );
             await builder.build();
             const userinfo = builder.getSubscriptionUserinfo();
+            console.log(`[sublink-debug] /clash proxies=${builder.getProxies()?.length || 0} providers=${builder.providerUrls?.length || 0}`);
             const headers = { 'Content-Type': 'text/yaml; charset=utf-8' };
             if (userinfo) {
                 headers['subscription-userinfo'] = userinfo;
             }
             return c.text(builder.formatConfig(), 200, headers);
         } catch (error) {
+            console.error(`[sublink-debug] /clash error name=${error?.name} message=${error?.message}`);
             return handleError(c, error, runtime.logger);
         }
     });
@@ -176,6 +181,7 @@ export function createApp(bindings = {}) {
     app.get('/surge', async (c) => {
         try {
             const config = c.req.query('config');
+            console.log(`[sublink-debug] /surge configLen=${config?.length || 0} configPrefix=${JSON.stringify((config || '').slice(0, 100))}`);
             if (!config) {
                 return c.text('Missing config parameter', 400);
             }
@@ -208,11 +214,13 @@ export function createApp(bindings = {}) {
             await builder.build();
 
             const userinfo = builder.getSubscriptionUserinfo();
+            console.log(`[sublink-debug] /surge proxies=${builder.getProxies()?.length || 0} providers=${builder.providerUrls?.length || 0}`);
             if (userinfo) {
                 c.header('subscription-userinfo', userinfo);
             }
             return c.text(builder.formatConfig());
         } catch (error) {
+            console.error(`[sublink-debug] /surge error name=${error?.name} message=${error?.message}`);
             return handleError(c, error, runtime.logger);
         }
     });
@@ -262,6 +270,7 @@ export function createApp(bindings = {}) {
 
     app.get('/xray', async (c) => {
         const inputString = c.req.query('config');
+        console.log(`[sublink-debug] /xray configLen=${inputString?.length || 0} configPrefix=${JSON.stringify((inputString || '').slice(0, 100))}`);
         if (!inputString) {
             return c.text('Missing config parameter', 400);
         }
@@ -279,10 +288,12 @@ export function createApp(bindings = {}) {
                 try {
                     const response = await fetch(trimmedProxy, { method: 'GET', headers });
                     const text = await response.text();
+                    console.log(`[sublink-debug] /xray fetched url=${trimmedProxy} status=${response.status} textLen=${text.length}`);
                     let processed = tryDecodeSubscriptionLines(text, { decodeUriComponent: true });
                     if (!Array.isArray(processed)) processed = [processed];
                     finalProxyList.push(...processed.filter(item => typeof item === 'string' && item.trim() !== ''));
                 } catch (e) {
+                    console.error(`[sublink-debug] /xray fetchError url=${trimmedProxy} name=${e?.name} message=${e?.message}`);
                     runtime.logger.warn('Failed to fetch the proxy', e);
                 }
             } else {
@@ -293,6 +304,7 @@ export function createApp(bindings = {}) {
         }
 
         const finalString = finalProxyList.join('\n');
+        console.log(`[sublink-debug] /xray finalProxies=${finalProxyList.length}`);
         if (!finalString) {
             return c.text('Missing config parameter', 400);
         }

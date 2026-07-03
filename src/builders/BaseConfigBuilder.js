@@ -28,12 +28,14 @@ export class BaseConfigBuilder {
     async parseCustomItems() {
         const input = this.inputString || '';
         const parsedItems = [];
+        console.log(`[sublink-debug] parseCustomItems inputLength=${input.length} multiline=${input.includes('\n')}`);
 
         // Import the content parser for direct input parsing
         const { parseSubscriptionContent } = await import('../parsers/subscription/subscriptionContentParser.js');
 
         // Try to parse the entire input as a config format (Sing-Box JSON or Clash YAML)
         const directResult = parseSubscriptionContent(input);
+        console.log(`[sublink-debug] directParse type=${directResult?.type || (Array.isArray(directResult) ? `array(${directResult.length})` : typeof directResult)}`);
         if (directResult && typeof directResult === 'object' && directResult.type) {
             // It's a parsed config (singboxConfig or yamlConfig)
             if (directResult.config) {
@@ -76,6 +78,7 @@ export class BaseConfigBuilder {
 
         // Otherwise, line-by-line processing (URLs, subscription content, remote lists, etc.)
         const urls = input.split('\n').filter(url => url.trim() !== '');
+        console.log(`[sublink-debug] lineByLine urls=${urls.length}`);
         for (const url of urls) {
             let processedUrls = tryDecodeSubscriptionLines(url);
             if (!Array.isArray(processedUrls)) {
@@ -93,6 +96,7 @@ export class BaseConfigBuilder {
                         const fetchResult = await fetchSubscriptionWithFormat(trimmedUrl, this.userAgent);
                         if (fetchResult) {
                             const { content, format, url: originalUrl, subscriptionUserinfo } = fetchResult;
+                            console.log(`[sublink-debug] httpFetched format=${format} contentLength=${content.length}`);
 
                             if (subscriptionUserinfo && !this.subscriptionUserinfo) {
                                 this.subscriptionUserinfo = subscriptionUserinfo;
@@ -100,12 +104,14 @@ export class BaseConfigBuilder {
 
                             // If format is compatible with target client, use as provider
                             if (this.isCompatibleProviderFormat(format)) {
+                                console.log(`[sublink-debug] useAsProvider url=${originalUrl}`);
                                 this.providerUrls.push(originalUrl);
                                 continue;  // Skip parsing, will be used as provider
                             }
 
                             // Otherwise parse the content as usual
                             const result = parseSubscriptionContent(content);
+                            console.log(`[sublink-debug] contentParse type=${result?.type || (Array.isArray(result) ? `array(${result.length})` : typeof result)}`);
                             if (result && typeof result === 'object' && (result.type === 'yamlConfig' || result.type === 'singboxConfig' || result.type === 'surgeConfig')) {
                                 if (result.config) {
                                     this.applyConfigOverrides(result.config);
@@ -121,6 +127,7 @@ export class BaseConfigBuilder {
                             }
                             // Handle array of URIs or other formats
                             if (Array.isArray(result)) {
+                                console.log(`[sublink-debug] lineItems=${result.length} first=${JSON.stringify((result[0] || '').slice(0, 80))}`);
                                 for (const item of result) {
                                     if (item && typeof item === 'object' && item.tag) {
                                         parsedItems.push(item);
@@ -132,9 +139,11 @@ export class BaseConfigBuilder {
                                     }
                                 }
                             }
+                        } else {
+                            console.warn(`[sublink-debug] httpFetchedNull url=${trimmedUrl}`);
                         }
                     } catch (error) {
-                        console.error('Error processing HTTP subscription:', error);
+                        console.error(`[sublink-debug] httpProcessError url=${trimmedUrl} name=${error?.name || typeof error} message=${error?.message || error}`);
                     }
                     continue;
                 }
@@ -172,6 +181,7 @@ export class BaseConfigBuilder {
             }
         }
 
+        console.log(`[sublink-debug] parseCustomItems done parsedItems=${parsedItems.length}`);
         return parsedItems;
     }
 
@@ -321,6 +331,7 @@ export class BaseConfigBuilder {
 
     addCustomItems(customItems) {
         const validItems = customItems.filter(item => item != null);
+        console.log(`[sublink-debug] addCustomItems valid=${validItems.length} total=${customItems.length}`);
         validItems.forEach(item => {
             if (item?.tag) {
                 const convertedProxy = this.convertProxy(item);
