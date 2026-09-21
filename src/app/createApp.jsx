@@ -75,19 +75,22 @@ export function createApp(bindings = {}) {
                 return c.text('Missing config parameter', 400);
             }
 
-            const selectedRules = parseSelectedRules(c.req.query('selectedRules'));
-            const customRules = parseJsonArray(c.req.query('customRules'));
-            const ua = c.req.query('ua') || getRequestHeader(c.req, 'User-Agent') || DEFAULT_USER_AGENT;
-            const groupByCountry = parseBooleanFlag(c.req.query('group_by_country'));
-            const includeAutoSelect = c.req.query('include_auto_select') !== 'false';
-            const enableClashUI = parseBooleanFlag(c.req.query('enable_clash_ui'));
-            const externalController = c.req.query('external_controller');
-            const externalUiDownloadUrl = c.req.query('external_ui_download_url');
-            const configId = c.req.query('configId');
-            const lang = c.get('lang');
+            const {
+                selectedRules,
+                customRules,
+                ua,
+                requestUserAgent,
+                groupByCountry,
+                includeAutoSelect,
+                skipCertVerify,
+                enableClashUI,
+                externalController,
+                externalUiDownloadUrl,
+                configId,
+                lang
+            } = parseConversionOptions(c);
 
             const requestedSingboxVersion = c.req.query('singbox_version') || c.req.query('sb_version') || c.req.query('sb_ver');
-            const requestUserAgent = getRequestHeader(c.req, 'User-Agent');
             const singboxConfigVersion = resolveSingboxConfigVersion(requestedSingboxVersion, requestUserAgent);
 
             let baseConfig = singboxConfigVersion === '1.11' ? SING_BOX_CONFIG_V1_11 : SING_BOX_CONFIG;
@@ -111,7 +114,8 @@ export function createApp(bindings = {}) {
                 externalController,
                 externalUiDownloadUrl,
                 singboxConfigVersion,
-                includeAutoSelect
+                includeAutoSelect,
+                skipCertVerify
             );
             await builder.build();
             const userinfo = builder.getSubscriptionUserinfo();
@@ -131,16 +135,19 @@ export function createApp(bindings = {}) {
                 return c.text('Missing config parameter', 400);
             }
 
-            const selectedRules = parseSelectedRules(c.req.query('selectedRules'));
-            const customRules = parseJsonArray(c.req.query('customRules'));
-            const ua = c.req.query('ua') || getRequestHeader(c.req, 'User-Agent') || DEFAULT_USER_AGENT;
-            const groupByCountry = parseBooleanFlag(c.req.query('group_by_country'));
-            const includeAutoSelect = c.req.query('include_auto_select') !== 'false';
-            const enableClashUI = parseBooleanFlag(c.req.query('enable_clash_ui'));
-            const externalController = c.req.query('external_controller');
-            const externalUiDownloadUrl = c.req.query('external_ui_download_url');
-            const configId = c.req.query('configId');
-            const lang = c.get('lang');
+            const {
+                selectedRules,
+                customRules,
+                ua,
+                groupByCountry,
+                includeAutoSelect,
+                skipCertVerify,
+                enableClashUI,
+                externalController,
+                externalUiDownloadUrl,
+                configId,
+                lang
+            } = parseConversionOptions(c);
 
             let baseConfig;
             if (configId?.startsWith('clash_')) {
@@ -159,7 +166,8 @@ export function createApp(bindings = {}) {
                 enableClashUI,
                 externalController,
                 externalUiDownloadUrl,
-                includeAutoSelect
+                includeAutoSelect,
+                skipCertVerify
             );
             await builder.build();
             const userinfo = builder.getSubscriptionUserinfo();
@@ -180,13 +188,15 @@ export function createApp(bindings = {}) {
                 return c.text('Missing config parameter', 400);
             }
 
-            const selectedRules = parseSelectedRules(c.req.query('selectedRules'));
-            const customRules = parseJsonArray(c.req.query('customRules'));
-            const ua = c.req.query('ua') || getRequestHeader(c.req, 'User-Agent') || DEFAULT_USER_AGENT;
-            const groupByCountry = parseBooleanFlag(c.req.query('group_by_country'));
-            const includeAutoSelect = c.req.query('include_auto_select') !== 'false';
-            const configId = c.req.query('configId');
-            const lang = c.get('lang');
+            const {
+                selectedRules,
+                customRules,
+                ua,
+                groupByCountry,
+                includeAutoSelect,
+                configId,
+                lang
+            } = parseConversionOptions(c);
 
             let baseConfig;
             if (configId?.startsWith('surge_')) {
@@ -409,6 +419,24 @@ export function createApp(bindings = {}) {
     });
 
     return app;
+}
+
+function parseConversionOptions(c) {
+    const requestUserAgent = getRequestHeader(c.req, 'User-Agent');
+    return {
+        selectedRules: parseSelectedRules(c.req.query('selectedRules')),
+        customRules: parseJsonArray(c.req.query('customRules')),
+        ua: c.req.query('ua') || requestUserAgent || DEFAULT_USER_AGENT,
+        requestUserAgent,
+        groupByCountry: parseBooleanFlag(c.req.query('group_by_country')),
+        includeAutoSelect: c.req.query('include_auto_select') !== 'false',
+        skipCertVerify: parseBooleanFlag(c.req.query('skip_cert_verify') ?? 'true'),
+        enableClashUI: parseBooleanFlag(c.req.query('enable_clash_ui')),
+        externalController: c.req.query('external_controller'),
+        externalUiDownloadUrl: c.req.query('external_ui_download_url'),
+        configId: c.req.query('configId'),
+        lang: c.get('lang')
+    };
 }
 
 export function parseSelectedRules(raw) {

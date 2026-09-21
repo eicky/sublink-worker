@@ -1,32 +1,23 @@
-import { parseServerInfo, parseUrlParams, createTlsConfig, createTransportConfig, parseBool } from '../../utils.js';
+import { parseProxyUri, createTlsConfig, createTransportConfig, parseBool } from '../../utils.js';
 
 export function parseVless(url) {
-    const { addressPart, params, name } = parseUrlParams(url);
-    const [uuid, serverInfo] = addressPart.split('@');
-    const { host, port } = parseServerInfo(serverInfo);
-
-    const tls = createTlsConfig(params);
-    if (tls.reality) {
-        tls.utls = {
-            enabled: true,
-            fingerprint: 'chrome'
-        };
-    }
-    const transport = params.type !== 'tcp' ? createTransportConfig(params) : undefined;
-
-    // `udp` is a Clash-only flag; ClashConfigBuilder reads it, SingboxConfigBuilder strips it.
-    const udp = params.udp !== undefined ? parseBool(params.udp) : undefined;
+    const { userinfo, host, port, params, name } = parseProxyUri(url);
+    const tls = createTlsConfig({ ...params, sni: params.sni || params.peer || host, fp: params.fp || 'chrome' });
+    const transport = createTransportConfig(params);
+    const udp = parseBool(params.udp);
 
     return {
         type: 'vless',
         tag: name,
         server: host,
         server_port: port,
-        uuid: decodeURIComponent(uuid),
-        tcp_fast_open: false,
+        uuid: decodeURIComponent(userinfo),
+        tcp_fast_open: parseBool(params.tfo, false),
         tls,
         transport,
-        flow: params.flow ?? undefined,
+        ...(params.flow ? { flow: params.flow } : {}),
+        ...(params.encryption !== undefined ? { encryption: params.encryption } : {}),
+        ...(params.packetEncoding ? { packet_encoding: params.packetEncoding } : {}),
         ...(udp !== undefined ? { udp } : {})
     };
 }

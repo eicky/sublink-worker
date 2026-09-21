@@ -1,61 +1,127 @@
 name: Release
 
 on:
+  workflow_dispatch:
   push:
     tags:
-      - "v*.*.*" # Trigger on version tags like v2.0.1
+      - 'v*.*.*'
 
 permissions:
-  contents: write # Required to create releases
+  contents: read
 
 jobs:
-  release:
+  verify:
+    name: Verify release source
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # Fetch all history for changelog generation
+      - uses: actions/checkout@v4
 
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          name: Sublink Worker ${{ steps.version.outputs.VERSION }}
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          package_version=$(node -p "require('./package.json').version")
+          test "${GITHUB_REF_NAME}" = "v${package_version}"
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build Node and Vercel bundles
+        run: npm run build:node && npm run build
+
+  build-native:
+    name: Build ${{ matrix.name }} package
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            os: ubuntu-22.04
+          - name: Windows x64
+            os: windows-2022
+          - name: macOS x64
+            os: macos-15-intel
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and smoke-test standalone package
+        run: npm run build:native
+
+      - name: Upload standalone package
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            dist/release/*.zip
+            dist/release/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-native
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download standalone packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd release-assets
+          sha256sum sublink-worker-* > SHA256SUMS.txt
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Sublink Worker ${{ github.ref_name }}
           body: |
-            ## Release ${{ steps.version.outputs.VERSION }}
+            ## Sublink Worker ${{ github.ref_name }}
 
-            ### 📚 Documentation
-            - [Complete Changelog](https://sublink.works/updates/)
-            - [Deployment Guide](https://sublink.works/guide/quick-start/)
-            - [API Documentation](https://sublink.works/api/)
+            ### 下载
+            - Windows、Linux、macOS 独立程序包：从下方 Assets 下载对应平台压缩包，解压后直接运行 `sublink-worker`（Windows 为 `sublink-worker.exe`）。压缩包已包含 Web 静态资源。
+            - Docker：`ghcr.io/eicky/sublink-worker:${{ github.ref_name }}` 或 `ghcr.io/eicky/sublink-worker:latest`。
+            - 完整性校验：下载 `SHA256SUMS.txt` 后核对程序包的 SHA-256。
 
-            ### 🚀 Quick Start
-            ```bash
-            # Cloudflare Workers
-            npm install && npm run deploy
+            默认监听 `8787` 端口；可通过 `PORT`、Redis/KV 等环境变量配置运行方式。
 
-            # Docker
-            docker compose up -d
-
-            # Node.js
-            npm run build:node && npm run dev:node
-            ```
-
-            ---
-            **Note:** This release was automatically created by GitHub Actions.
-            For detailed changes, see the [changelog](https://sublink.works/updates/).
-          generate_release_notes: true # Auto-generate notes from commits
+            ### 文档
+            - [部署与接口说明](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/README.md)
+            - [协议支持矩阵与验证](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/docs/protocol-support.md)
+            - [问题反馈](${{ github.server_url }}/${{ github.repository }}/issues)
+          generate_release_notes: true
+          files: release-assets/*
+          fail_on_unmatched_files: true
           draft: false
           prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Notify success
-        if: success()
-        run: |
-          echo "✅ Release ${{ steps.version.outputs.VERSION }} created successfully!"
-          echo "View at: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ steps.version.outputs.VERSION }}"

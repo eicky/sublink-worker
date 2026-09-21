@@ -86,7 +86,7 @@ describe('Issue #297: sing-box outbounds must not carry a top-level `network`', 
 
         expect(result.network).toBeUndefined();
         expect(result.transport).toBeDefined();
-        expect(result.transport.type).toBe('h2');
+        expect(result.transport.type).toBe('http');
     });
 
     it('parseVmess should not emit a top-level network field for plain TCP (no transport)', () => {

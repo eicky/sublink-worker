@@ -1,11 +1,99 @@
-import { base64ToBinary } from '../../utils.js';
+import { base64ToBinary, decodeBase64, parseServerInfo, parseUrlParams } from '../../utils.js';
+import { InvalidPayloadError } from '../../services/errors.js';
 
-function parseServer(serverPart) {
-    const match = serverPart.match(/\[([^\]]+)\]:(\d+)/);
-    if (match) {
-        return [match[1], match[2]];
+const AEAD_2022_KEY_LENGTHS = {
+    '2022-blake3-aes-128-gcm': 16,
+    '2022-blake3-aes-256-gcm': 32,
+    '2022-blake3-chacha20-poly1305': 32,
+    '2022-blake3-chacha12-poly1305': 32,
+    '2022-blake3-chacha8-poly1305': 32
+};
+
+function splitMethodAndPassword(value) {
+    const separator = value.indexOf(':');
+    if (separator <= 0) {
+        throw new Error('Invalid Shadowsocks userinfo');
     }
-    return serverPart.split(':');
+    return [value.slice(0, separator), value.slice(separator + 1)];
+}
+
+function parseUserInfo(userInfo) {
+    if (userInfo.includes(':')) {
+        const [method, password] = splitMethodAndPassword(userInfo);
+        return [decodeURIComponent(method), decodeURIComponent(password)];
+    }
+    const credentials = splitMethodAndPassword(decodeBase64(decodeURIComponent(userInfo)));
+    if (credentials[0].startsWith('2022-blake3-')) {
+        throw new Error('AEAD-2022 userinfo must not be Base64URL-encoded');
+    }
+    return credentials;
+}
+
+function validateCredentials(method, password) {
+    if (!method || !password) {
+        throw new Error('Shadowsocks method and password are required');
+    }
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(method)) {
+        throw new Error('Invalid Shadowsocks method');
+    }
+
+    if (!method.startsWith('2022-blake3-')) {
+        return;
+    }
+
+    const expectedLength = AEAD_2022_KEY_LENGTHS[method];
+    if (!expectedLength) {
+        throw new Error(`Unsupported AEAD-2022 method: ${method}`);
+    }
+    for (const key of password.split(':')) {
+        if (!/^[A-Za-z0-9+/]+={0,2}$/.test(key) || base64ToBinary(key).length !== expectedLength) {
+            throw new Error(`Invalid ${method} key`);
+        }
+    }
+}
+
+function splitEscaped(value, separator) {
+    const parts = [];
+    let current = '';
+    let escaped = false;
+
+    for (const character of value) {
+        if (escaped) {
+            current += `\\${character}`;
+            escaped = false;
+        } else if (character === '\\') {
+            escaped = true;
+        } else if (character === separator) {
+            parts.push(current);
+            current = '';
+        } else {
+            current += character;
+        }
+    }
+    if (escaped) {
+        throw new Error('Invalid escaped plugin option');
+    }
+    parts.push(current);
+    return parts;
+}
+
+function findUnescaped(value, separator) {
+    let escaped = false;
+    for (let index = 0; index < value.length; index++) {
+        const character = value[index];
+        if (escaped) {
+            escaped = false;
+        } else if (character === '\\') {
+            escaped = true;
+        } else if (character === separator) {
+            return index;
+        }
+    }
+    return -1;
+}
+
+function unescapePluginValue(value) {
+    return value.replace(/\\(.)/gs, '$1');
 }
 
 /**
@@ -17,55 +105,43 @@ function parseServer(serverPart) {
 function parsePluginString(pluginStr) {
     if (!pluginStr) return null;
 
-    const parts = pluginStr.split(';');
-    const pluginName = parts[0];
+    const parts = splitEscaped(pluginStr, ';');
+    const pluginName = unescapePluginValue(parts[0]);
 
     if (!pluginName) return null;
 
     const opts = {};
     for (let i = 1; i < parts.length; i++) {
-        const eqIndex = parts[i].indexOf('=');
+        const eqIndex = findUnescaped(parts[i], '=');
         if (eqIndex === -1) {
             // Boolean flag without value (e.g., "tls")
-            const key = parts[i].trim();
+            const key = unescapePluginValue(parts[i]).trim();
             if (key) {
                 opts[key] = true;
             }
             continue;
         }
-        const key = parts[i].substring(0, eqIndex);
-        const value = parts[i].substring(eqIndex + 1);
+        const key = unescapePluginValue(parts[i].substring(0, eqIndex));
+        const value = unescapePluginValue(parts[i].substring(eqIndex + 1));
         if (key) {
-            // Map SIP003 parameter names to Clash plugin-opts format
-            // simple-obfs parameters: obfs -> mode, obfs-host -> host
-            // v2ray-plugin parameters: mode, host, path, tls, etc.
-            if (key === 'obfs') {
-                opts.mode = value;
-            } else if (key === 'obfs-host') {
-                opts.host = value;
-            } else if (key === 'obfs-uri') {
-                opts.path = value;
-            } else {
-                opts[key] = value;
-            }
+            opts[key] = value;
         }
     }
 
-    // Normalize plugin name: simple-obfs -> obfs (Clash uses 'obfs')
-    const normalizedPlugin = pluginName === 'simple-obfs' ? 'obfs' : pluginName;
-
     return {
-        plugin: normalizedPlugin,
+        plugin: pluginName,
         plugin_opts: Object.keys(opts).length > 0 ? opts : undefined
     };
 }
 
-function createConfig(tag, server, server_port, method, password, pluginInfo) {
+function createConfig(tag, server, serverPort, method, password, pluginInfo) {
+    validateCredentials(method, password);
+    const displayServer = server.includes(':') ? `[${server}]` : server;
     const config = {
-        tag: tag || 'Shadowsocks',
+        tag: tag || `${displayServer}:${serverPort}`,
         type: 'shadowsocks',
         server,
-        server_port: parseInt(server_port),
+        server_port: serverPort,
         method,
         password,
         tcp_fast_open: false
@@ -83,49 +159,39 @@ function createConfig(tag, server, server_port, method, password, pluginInfo) {
 }
 
 export function parseShadowsocks(url) {
-    let parts = url.replace('ss://', '').split('#');
-    let mainPart = parts[0];
-    let tag = parts[1];
-    if (tag && tag.includes('%')) {
-        tag = decodeURIComponent(tag);
-    }
-
-    // Extract query parameters (for plugin support)
-    let queryString = '';
-    const queryIndex = mainPart.indexOf('?');
-    if (queryIndex !== -1) {
-        queryString = mainPart.substring(queryIndex + 1);
-        mainPart = mainPart.substring(0, queryIndex);
-    }
-
-    // Parse plugin from query string
-    let pluginInfo = null;
-    if (queryString) {
-        const params = new URLSearchParams(queryString);
-        const pluginParam = params.get('plugin');
-        if (pluginParam) {
-            pluginInfo = parsePluginString(pluginParam);
-        }
-    }
-
     try {
-        let [base64, serverPart] = mainPart.split('@');
-        if (!serverPart) {
-            const decodedLegacy = base64ToBinary(mainPart);
-            const [methodAndPass, serverInfo] = decodedLegacy.split('@');
-            const [method, password] = methodAndPass.split(':');
-            const [server, server_port] = parseServer(serverInfo);
-            return createConfig(tag, server, server_port, method, password, pluginInfo);
+        const normalizedUrl = typeof url === 'string' ? url.trim() : '';
+        if (!/^ss:\/\//i.test(normalizedUrl)) {
+            throw new Error('Invalid Shadowsocks URI scheme');
         }
 
-        let decodedParts = base64ToBinary(decodeURIComponent(base64)).split(':');
-        let method = decodedParts[0];
-        let password = decodedParts.slice(1).join(':');
-        let [server, server_port] = parseServer(serverPart);
+        const { addressPart, params, name } = parseUrlParams(normalizedUrl);
+        const hasPlugin = Object.hasOwn(params, 'plugin');
+        const pluginInfo = hasPlugin ? parsePluginString(params.plugin) : null;
+        if (hasPlugin && !pluginInfo) {
+            throw new Error('Shadowsocks plugin name is required');
+        }
+        const serverSeparator = addressPart.lastIndexOf('@');
 
-        return createConfig(tag, server, server_port, method, password, pluginInfo);
-    } catch (e) {
-        console.error('Failed to parse shadowsocks URL:', e);
-        return null;
+        if (serverSeparator < 0) {
+            const decodedLegacy = decodeBase64(decodeURIComponent(addressPart));
+            const legacyServerSeparator = decodedLegacy.lastIndexOf('@');
+            if (legacyServerSeparator <= 0) {
+                throw new Error('Invalid legacy Shadowsocks URL');
+            }
+            const [method, password] = splitMethodAndPassword(decodedLegacy.slice(0, legacyServerSeparator));
+            if (method.startsWith('2022-blake3-')) {
+                throw new Error('AEAD-2022 credentials must use plain SIP002 userinfo');
+            }
+            const { host, port } = parseServerInfo(decodedLegacy.slice(legacyServerSeparator + 1));
+            return createConfig(name, host, port, method, password, pluginInfo);
+        }
+
+        const [method, password] = parseUserInfo(addressPart.slice(0, serverSeparator));
+        const { host, port } = parseServerInfo(addressPart.slice(serverSeparator + 1));
+        return createConfig(name, host, port, method, password, pluginInfo);
+    } catch (error) {
+        if (error instanceof InvalidPayloadError) throw error;
+        throw new InvalidPayloadError('Invalid Shadowsocks URI');
     }
 }

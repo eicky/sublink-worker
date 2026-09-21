@@ -4,6 +4,7 @@ import { checkStartsWith } from "../utils.js";
 // 定义语言包
 export const translations = {
   'zh-CN': {
+    skipCertVerify: '跳过代理服务器证书校验',
     enableClashUI: '启用 Clash API',
     enableClashUITip: '在 SingBox 配置中启用 Clash API (支持 Dashboard 面板)，默认端口 9090',
     externalController: '外部控制端口',
@@ -167,6 +168,7 @@ export const translations = {
     later: '稍后'
   },
   'en-US': {
+    skipCertVerify: 'Skip proxy server certificate verification',
     enableClashUI: 'Enable Clash API',
     enableClashUITip: 'Enable Clash API in SingBox config (Support Dashboard), default port 9090',
     externalController: 'External Controller',
@@ -329,6 +331,7 @@ export const translations = {
     later: 'Later'
   },
   'fa': {
+    skipCertVerify: 'نادیده گرفتن اعتبارسنجی گواهی سرور پراکسی',
     missingInput: 'پارامتر ورودی وجود ندارد',
     missingConfig: 'پارامتر پیکربندی وجود ندارد',
     missingUrl: 'پارامتر URL وجود ندارد',
@@ -485,6 +488,7 @@ export const translations = {
     later: 'بعداً'
   },
   'ru': {
+    skipCertVerify: 'Пропускать проверку сертификата прокси-сервера',
     missingInput: 'Отсутствует входной параметр',
     missingConfig: 'Отсутствует параметр конфигурации',
     missingUrl: 'Отсутствует параметр URL',

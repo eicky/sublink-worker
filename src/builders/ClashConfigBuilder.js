@@ -7,6 +7,7 @@ import { buildSelectorMembers, buildNodeSelectMembers, buildCustomRuleMembers, u
 import { emitClashRules, sanitizeClashProxyGroups } from './helpers/clashConfigUtils.js';
 import { normalizeGroupName, findGroupIndexByName } from './helpers/groupNameUtils.js';
 import { InvalidConfigError } from '../services/errors.js';
+import { buildClashProxy } from './helpers/clashProxy.js';
 
 /**
  * Check if the client supports MRS (Meta Rule Set) format
@@ -40,15 +41,9 @@ function supportsMrsFormat(userAgent) {
     return true;
 }
 
-function getClashUdpValue(proxy, defaultEnabled = true) {
-    if (typeof proxy?.udp !== 'undefined') {
-        return proxy.udp;
-    }
-    return defaultEnabled;
-}
-
 export class ClashConfigBuilder extends BaseConfigBuilder {
-    constructor(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry = false, enableClashUI = false, externalController, externalUiDownloadUrl, includeAutoSelect = true) {
+    outputFormat = 'yamlConfig';
+    constructor(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry = false, enableClashUI = false, externalController, externalUiDownloadUrl, includeAutoSelect = true, skipCertVerify = false) {
         if (!baseConfig) {
             baseConfig = CLASH_CONFIG;
         }
@@ -60,6 +55,7 @@ export class ClashConfigBuilder extends BaseConfigBuilder {
         this.enableClashUI = enableClashUI;
         this.externalController = externalController;
         this.externalUiDownloadUrl = externalUiDownloadUrl;
+        this.skipCertVerify = skipCertVerify;
     }
 
     /**
@@ -129,183 +125,7 @@ export class ClashConfigBuilder extends BaseConfigBuilder {
     }
 
     convertProxy(proxy) {
-        switch (proxy.type) {
-            case 'shadowsocks':
-                return {
-                    name: proxy.tag,
-                    type: 'ss',
-                    server: proxy.server,
-                    port: proxy.server_port,
-                    cipher: proxy.method,
-                    password: proxy.password,
-                    udp: getClashUdpValue(proxy),
-                    ...(proxy.plugin ? { plugin: proxy.plugin } : {}),
-                    ...(proxy.plugin_opts ? { 'plugin-opts': proxy.plugin_opts } : {})
-                };
-            case 'vmess':
-                return {
-                    name: proxy.tag,
-                    type: proxy.type,
-                    server: proxy.server,
-                    port: proxy.server_port,
-                    uuid: proxy.uuid,
-                    alterId: proxy.alter_id ?? 0,
-                    cipher: proxy.security,
-                    tls: proxy.tls?.enabled || false,
-                    servername: proxy.tls?.server_name || '',
-                    'skip-cert-verify': !!proxy.tls?.insecure,
-                    network: proxy.transport?.type || proxy.network || 'tcp',
-                    'ws-opts': proxy.transport?.type === 'ws'
-                        ? {
-                            path: proxy.transport.path,
-                            headers: proxy.transport.headers
-                        }
-                        : undefined,
-                    'http-opts': proxy.transport?.type === 'http'
-                        ? (() => {
-                            const opts = {
-                                method: proxy.transport.method || 'GET',
-                                path: Array.isArray(proxy.transport.path) ? proxy.transport.path : [proxy.transport.path || '/'],
-                            };
-                            if (proxy.transport.headers && Object.keys(proxy.transport.headers).length > 0) {
-                                opts.headers = proxy.transport.headers;
-                            }
-                            return opts;
-                        })()
-                        : undefined,
-                    'grpc-opts': proxy.transport?.type === 'grpc'
-                        ? {
-                            'grpc-service-name': proxy.transport.service_name
-                        }
-                        : undefined,
-                    'h2-opts': proxy.transport?.type === 'h2'
-                        ? {
-                            path: proxy.transport.path,
-                            host: proxy.transport.host
-                        }
-                        : undefined,
-                    udp: getClashUdpValue(proxy)
-                };
-            case 'vless':
-                return {
-                    name: proxy.tag,
-                    type: proxy.type,
-                    server: proxy.server,
-                    port: proxy.server_port,
-                    uuid: proxy.uuid,
-                    cipher: proxy.security,
-                    tls: proxy.tls?.enabled || false,
-                    'client-fingerprint': proxy.tls?.utls?.fingerprint,
-                    servername: proxy.tls?.server_name || '',
-                    network: proxy.transport?.type || 'tcp',
-                    'ws-opts': proxy.transport?.type === 'ws' ? {
-                        path: proxy.transport.path,
-                        headers: proxy.transport.headers
-                    } : undefined,
-                    'reality-opts': proxy.tls?.reality?.enabled ? {
-                        'public-key': proxy.tls.reality.public_key,
-                        'short-id': proxy.tls.reality.short_id,
-                    } : undefined,
-                    'grpc-opts': proxy.transport?.type === 'grpc' ? {
-                        'grpc-service-name': proxy.transport.service_name,
-                    } : undefined,
-                    tfo: proxy.tcp_fast_open,
-                    'skip-cert-verify': !!proxy.tls?.insecure,
-                    udp: getClashUdpValue(proxy),
-                    ...(proxy.alpn ? { alpn: proxy.alpn } : {}),
-                    ...(proxy.packet_encoding ? { 'packet-encoding': proxy.packet_encoding } : {}),
-                    'flow': proxy.flow ?? undefined,
-                };
-            case 'hysteria2':
-                return {
-                    name: proxy.tag,
-                    type: proxy.type,
-                    server: proxy.server,
-                    port: proxy.server_port,
-                    ...(proxy.ports ? { ports: proxy.ports } : {}),
-                    obfs: proxy.obfs?.type,
-                    'obfs-password': proxy.obfs?.password,
-                    password: proxy.password,
-                    auth: proxy.auth,
-                    up: proxy.up,
-                    down: proxy.down,
-                    'recv-window-conn': proxy.recv_window_conn,
-                    sni: proxy.tls?.server_name || '',
-                    'skip-cert-verify': !!proxy.tls?.insecure,
-                    ...(proxy.hop_interval !== undefined ? { 'hop-interval': proxy.hop_interval } : {}),
-                    ...(proxy.alpn ? { alpn: proxy.alpn } : {}),
-                    ...(proxy.fast_open !== undefined ? { 'fast-open': proxy.fast_open } : {}),
-                };
-            case 'trojan':
-                return {
-                    name: proxy.tag,
-                    type: proxy.type,
-                    server: proxy.server,
-                    port: proxy.server_port,
-                    password: proxy.password,
-                    cipher: proxy.security,
-                    tls: proxy.tls?.enabled || false,
-                    'client-fingerprint': proxy.tls?.utls?.fingerprint,
-                    sni: proxy.tls?.server_name || '',
-                    network: proxy.transport?.type || 'tcp',
-                    'ws-opts': proxy.transport?.type === 'ws' ? {
-                        path: proxy.transport.path,
-                        headers: proxy.transport.headers
-                    } : undefined,
-                    'reality-opts': proxy.tls?.reality?.enabled ? {
-                        'public-key': proxy.tls.reality.public_key,
-                        'short-id': proxy.tls.reality.short_id,
-                    } : undefined,
-                    'grpc-opts': proxy.transport?.type === 'grpc' ? {
-                        'grpc-service-name': proxy.transport.service_name,
-                    } : undefined,
-                    tfo: proxy.tcp_fast_open,
-                    'skip-cert-verify': !!proxy.tls?.insecure,
-                    ...(proxy.alpn ? { alpn: proxy.alpn } : {}),
-                    'flow': proxy.flow ?? undefined,
-                    udp: getClashUdpValue(proxy),
-                };
-            case 'tuic':
-                return {
-                    name: proxy.tag,
-                    type: proxy.type,
-                    server: proxy.server,
-                    port: proxy.server_port,
-                    uuid: proxy.uuid,
-                    password: proxy.password,
-                    'congestion-controller': proxy.congestion_control,
-                    'skip-cert-verify': !!proxy.tls?.insecure,
-                    ...(proxy.disable_sni !== undefined ? { 'disable-sni': proxy.disable_sni } : {}),
-                    ...(proxy.tls?.alpn ? { alpn: proxy.tls.alpn } : {}),
-                    'sni': proxy.tls?.server_name,
-                    'udp-relay-mode': proxy.udp_relay_mode || 'native',
-                    ...(proxy.zero_rtt !== undefined ? { 'zero-rtt': proxy.zero_rtt } : {}),
-                    ...(proxy.reduce_rtt !== undefined ? { 'reduce-rtt': proxy.reduce_rtt } : {}),
-                    ...(proxy.fast_open !== undefined ? { 'fast-open': proxy.fast_open } : {}),
-                };
-            case 'anytls': {
-                const idleSessionCheckInterval = proxy['idle-session-check-interval'] ?? proxy.idle_session_check_interval;
-                const idleSessionTimeout = proxy['idle-session-timeout'] ?? proxy.idle_session_timeout;
-                const minIdleSession = proxy['min-idle-session'] ?? proxy.min_idle_session;
-                return {
-                    name: proxy.tag,
-                    type: 'anytls',
-                    server: proxy.server,
-                    port: proxy.server_port,
-                    password: proxy.password,
-                    udp: getClashUdpValue(proxy),
-                    ...(proxy.tls?.utls?.fingerprint ? { 'client-fingerprint': proxy.tls.utls.fingerprint } : {}),
-                    ...(proxy.tls?.server_name ? { sni: proxy.tls.server_name } : {}),
-                    ...(proxy.tls?.insecure !== undefined ? { 'skip-cert-verify': !!proxy.tls.insecure } : {}),
-                    ...(proxy.tls?.alpn ? { alpn: proxy.tls.alpn } : {}),
-                    ...(idleSessionCheckInterval !== undefined ? { 'idle-session-check-interval': idleSessionCheckInterval } : {}),
-                    ...(idleSessionTimeout !== undefined ? { 'idle-session-timeout': idleSessionTimeout } : {}),
-                    ...(minIdleSession !== undefined ? { 'min-idle-session': minIdleSession } : {}),
-                };
-            }
-            default:
-                return proxy; // Return as-is if no specific conversion is defined
-        }
+        return buildClashProxy(proxy, this.skipCertVerify);
     }
 
     addProxyToConfig(proxy) {
@@ -666,6 +486,17 @@ export class ClashConfigBuilder extends BaseConfigBuilder {
     }
 
     formatConfig() {
+        if (this.skipCertVerify) {
+            if (this.getExistingProviderNames().length) {
+                throw new InvalidConfigError('skip_cert_verify cannot be applied to preconfigured proxy providers; inline their nodes first');
+            }
+            // Base-config nodes bypass convertProxy, but must follow the same explicit policy.
+            this.config.proxies = this.getProxies().map(proxy => {
+                if (proxy['reality-opts'] || !(proxy.tls === true || ['trojan', 'hysteria', 'hysteria2', 'tuic', 'anytls'].includes(proxy.type))) return proxy;
+                const { fingerprint, ...rest } = proxy;
+                return { ...rest, 'skip-cert-verify': true };
+            });
+        }
         const rules = this.generateRules();
         const useMrs = supportsMrsFormat(this.userAgent);
         const { site_rule_providers, ip_rule_providers } = generateClashRuleSets(this.selectedRules, this.customRules, useMrs);

@@ -1,3 +1,5 @@
+import { InvalidPayloadError } from './services/errors.js';
+
 const PATH_LENGTH = 7;
 const FNV_32_OFFSET_BASIS = 0x811c9dc5;
 const FNV_32_PRIME = 0x01000193;
@@ -69,27 +71,20 @@ export function base64FromBinary(binaryString) {
 
 // 将 Base64 转换为二进制字符串（解码）
 export function base64ToBinary(base64String) {
-	const base64Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-	let binaryString = '';
-	base64String = base64String.replace(/=+$/, ''); // 去掉末尾的 '='
-
-	for (let i = 0; i < base64String.length; i += 4) {
-		const bytes = [
-			base64Chars.indexOf(base64String[i]),
-			base64Chars.indexOf(base64String[i + 1]),
-			base64Chars.indexOf(base64String[i + 2]),
-			base64Chars.indexOf(base64String[i + 3])
-		];
-		const byte1 = (bytes[0] << 2) | (bytes[1] >> 4);
-		const byte2 = ((bytes[1] & 15) << 4) | (bytes[2] >> 2);
-		const byte3 = ((bytes[2] & 3) << 6) | bytes[3];
-
-		if (bytes[1] !== -1) binaryString += String.fromCharCode(byte1);
-		if (bytes[2] !== -1) binaryString += String.fromCharCode(byte2);
-		if (bytes[3] !== -1) binaryString += String.fromCharCode(byte3);
+	if (typeof base64String !== 'string') {
+		throw new InvalidPayloadError('Invalid Base64 value');
 	}
-
-	return binaryString;
+	const normalized = base64String.replace(/\s/g, '').replace(/-/g, '+').replace(/_/g, '/');
+	if (!/^[A-Za-z0-9+/]*={0,2}$/.test(normalized) || normalized.length % 4 === 1) {
+		throw new InvalidPayloadError('Invalid Base64 value');
+	}
+	try {
+		// Share links commonly omit padding; atob still rejects misplaced padding.
+		const padded = normalized.includes('=') ? normalized : normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+		return atob(padded);
+	} catch (_) {
+		throw new InvalidPayloadError('Invalid Base64 value');
+	}
 }
 
 export function tryDecodeSubscriptionLines(input, { decodeUriComponent = false } = {}) {
@@ -252,89 +247,207 @@ export function generateWebPath(length = PATH_LENGTH) {
 	return result
 }
 
-export function parseServerInfo(serverInfo) {
-	if (!serverInfo || typeof serverInfo !== 'string') {
-		return { host: null, port: null };
+export function parseServerInfo(serverInfo, defaultPort) {
+	if (typeof serverInfo !== 'string' || !serverInfo) {
+		throw new InvalidPayloadError('Missing proxy server');
 	}
+	const authority = serverInfo.replace(/\/$/, '');
 	let host, port;
-	if (serverInfo.startsWith('[')) {
-		const closeBracketIndex = serverInfo.indexOf(']');
-		host = serverInfo.slice(1, closeBracketIndex);
-		port = serverInfo.slice(closeBracketIndex + 2); // +2 to skip ']:'
+	if (authority.startsWith('[')) {
+		const match = authority.match(/^\[([^\]]+)\](?::([^:]*))?$/);
+		if (!match || !match[1].includes(':')) {
+			throw new InvalidPayloadError('Invalid bracketed IPv6 address');
+		}
+		[, host, port] = match;
+		try {
+			new URL(`http://[${host}]/`);
+		} catch (_) {
+			throw new InvalidPayloadError('Invalid IPv6 address');
+		}
 	} else {
-		const lastColonIndex = serverInfo.lastIndexOf(':');
-		host = serverInfo.slice(0, lastColonIndex);
-		port = serverInfo.slice(lastColonIndex + 1);
+		const parts = authority.split(':');
+		if (parts.length > 2) {
+			throw new InvalidPayloadError('IPv6 addresses must be enclosed in brackets');
+		}
+		[host, port] = parts;
 	}
-	return { host, port: parseInt(port) };
+	if (!host || /[\s\/@?#\[\]]/.test(host)) {
+		throw new InvalidPayloadError('Invalid proxy server');
+	}
+	const portValue = port === undefined ? defaultPort : port;
+	if (!/^\d+$/.test(String(portValue)) || Number(portValue) < 1 || Number(portValue) > 65535) {
+		throw new InvalidPayloadError('Proxy port must be an integer between 1 and 65535');
+	}
+	return { host, port: Number(portValue) };
 }
 
 export function parseUrlParams(url) {
-	const [, rest] = url.split('://');
-	const [addressPart, ...remainingParts] = rest.split('?');
-	const paramsPart = remainingParts.join('?');
-
-	const [paramsOnly, ...fragmentParts] = paramsPart.split('#');
-	const searchParams = new URLSearchParams(paramsOnly);
-	const params = Object.fromEntries(searchParams.entries());
-
-	let name = fragmentParts.length > 0 ? fragmentParts.join('#') : '';
+	if (typeof url !== 'string' || !/^[a-z][a-z\d+.-]*:\/\//i.test(url)) {
+		throw new InvalidPayloadError('Invalid proxy URI scheme');
+	}
+	const rest = url.slice(url.indexOf('://') + 3);
+	const hashIndex = rest.indexOf('#');
+	const beforeFragment = hashIndex < 0 ? rest : rest.slice(0, hashIndex);
+	if (/%(?![\da-f]{2})/i.test(beforeFragment)) throw new InvalidPayloadError('Invalid URI percent encoding');
+	let name = hashIndex < 0 ? '' : rest.slice(hashIndex + 1);
+	const queryIndex = beforeFragment.indexOf('?');
+	const addressPart = queryIndex < 0 ? beforeFragment : beforeFragment.slice(0, queryIndex);
+	const searchParams = new URLSearchParams(queryIndex < 0 ? '' : beforeFragment.slice(queryIndex + 1));
+	const seen = new Set();
+	for (const key of searchParams.keys()) {
+		if (seen.has(key)) throw new InvalidPayloadError(`Duplicate URI parameter: ${key}`);
+		seen.add(key);
+	}
 	try {
 		name = decodeURIComponent(name);
-	} catch (error) { };
-
-	return { addressPart, params, name };
+	} catch (_) {
+		// A literal percent in a display name must not corrupt the credentials.
+	}
+	return { addressPart, params: Object.fromEntries(searchParams), name };
 }
 
-export function createTlsConfig(params) {
-	let tls = { enabled: false };
-	if (params.security && params.security !== 'none') {
-		tls = {
-			enabled: true,
-			server_name: params.sni || params.host,
-			insecure: !!params?.allowInsecure || !!params?.insecure || !!params?.allow_insecure,
-			// utls: {
-			//   enabled: true,
-			//   fingerprint: "chrome"
-			// },
-		};
-		if (params.security === 'reality') {
-			tls.reality = {
-				enabled: true,
-				public_key: params.pbk,
-				short_id: params.sid,
-			};
-		}
+export function parseProxyUri(url, defaultPort, { requireUserinfo = true } = {}) {
+	const { addressPart, params, name } = parseUrlParams(url);
+	const atIndex = addressPart.lastIndexOf('@');
+	if (requireUserinfo && atIndex <= 0) {
+		throw new InvalidPayloadError('Proxy URI is missing credentials');
+	}
+	const { host, port } = parseServerInfo(addressPart.slice(atIndex + 1), defaultPort);
+	return {
+		userinfo: atIndex < 0 ? '' : addressPart.slice(0, atIndex),
+		host, port, params,
+		fragmentName: name,
+		name: name || `${host}:${port}`
+	};
+}
+
+export function parseCertificateSha256(value, name = 'certificate fingerprint') {
+	if (value === undefined) return undefined;
+	const normalized = String(value).trim().toLowerCase().replace(/[:-]/g, '');
+	if (!/^[a-f0-9]{64}$/.test(normalized)) throw new InvalidPayloadError(`Invalid ${name}: expected a SHA-256 certificate fingerprint`);
+	return normalized;
+}
+
+export function createEchConfig(value) {
+	if (typeof value !== 'string' || !value) throw new InvalidPayloadError('ECH config must be Base64');
+	const base64 = base64FromBinary(base64ToBinary(value));
+	return { enabled: true, config: ['-----BEGIN ECH CONFIGS-----', base64, '-----END ECH CONFIGS-----'] };
+}
+
+export function createTlsConfig(params = {}) {
+	const security = params.security ?? 'none';
+	const certificatePin = params.pcs?.trim();
+	if (certificatePin && security !== 'tls') throw new InvalidPayloadError('TLS pcs certificate pinning requires security=tls');
+	if (security === 'none') return { enabled: false };
+	if (security !== 'tls' && security !== 'reality') {
+		throw new InvalidPayloadError(`Unsupported TLS security: ${security}`);
+	}
+	for (const option of ['ech', 'vcn', 'pqv', 'spx']) {
+		if (params[option]) throw new InvalidPayloadError(`Unsupported TLS share-link option: ${option}`);
+	}
+	const tls = {
+		enabled: true,
+		server_name: params.sni || params.peer || params.host || undefined,
+		insecure: parseBoolParam(params.allowInsecure ?? params.insecure ?? params.allow_insecure ?? params['skip-cert-verify'], { fallback: false, name: 'TLS insecure flag' })
+	};
+	if (certificatePin) tls.certificate_sha256 = parseCertificateSha256(certificatePin, 'TLS pcs');
+	const alpn = parseArray(params.alpn);
+	if (alpn?.length) tls.alpn = alpn;
+	const fingerprint = params.fp || params['client-fingerprint'] || (security === 'reality' ? 'chrome' : undefined);
+	if (fingerprint && fingerprint !== 'none') {
+		tls.utls = { enabled: true, fingerprint };
+	}
+	if (security === 'reality') {
+		if (!params.pbk) throw new InvalidPayloadError('REALITY requires a public key (pbk)');
+		tls.reality = { enabled: true, public_key: params.pbk, short_id: params.sid ?? '' };
 	}
 	return tls;
 }
 
-export function createTransportConfig(params) {
+function transportPath(path, type) {
+	const queryIndex = path.indexOf('?');
+	const fragmentIndex = path.indexOf('#');
+	if (queryIndex < 0 || (fragmentIndex >= 0 && fragmentIndex < queryIndex)) return { path };
+	const query = new URLSearchParams(path.slice(queryIndex + 1, fragmentIndex < 0 ? undefined : fragmentIndex));
+	const earlyData = query.get('ed');
+	if (earlyData === null || earlyData === '') return { path };
+	if (!/^\d+$/.test(earlyData) || Number(earlyData) > 8192 || query.getAll('ed').length > 1) {
+		throw new InvalidPayloadError('Invalid transport early-data size');
+	}
+	// Xray consumes ed locally; it is not part of the server's request path.
+	query.delete('ed');
+	const suffix = query.toString();
 	return {
-		type: params.type,
-		path: params.path ?? undefined,
-		...(params.host && { 'headers': { 'host': params.host } }),
-		...(params.type === 'grpc' && {
-			service_name: params.serviceName ?? undefined,
-		})
+		path: path.slice(0, queryIndex) + (suffix ? `?${suffix}` : '') + (fragmentIndex < 0 ? '' : path.slice(fragmentIndex)),
+		max_early_data: Number(earlyData),
+		...(type === 'ws' ? { early_data_header_name: 'Sec-WebSocket-Protocol' } : {})
 	};
+}
+
+export function createTransportConfig(params = {}) {
+	if (params.fm) throw new InvalidPayloadError('FinalMask transport settings cannot be converted');
+	const type = params.type || 'tcp';
+	if (type === 'tcp' || type === 'raw') {
+		if (params.headerType === 'http') {
+			return { type: 'http-obfs', path: parseArray(params.path) || ['/'], ...(params.host ? { headers: { Host: parseArray(params.host) } } : {}) };
+		}
+		return undefined;
+	}
+	const path = params.path || '/';
+	switch (type) {
+		case 'ws':
+			return { type, ...transportPath(path, type), ...(params.host ? { headers: { Host: params.host } } : {}) };
+		case 'http':
+		case 'h2':
+			return { type: 'http', ...(params.host ? { host: parseArray(params.host) } : {}), path };
+		case 'httpupgrade':
+			return { type, ...(params.host ? { host: params.host } : {}), ...transportPath(path, type) };
+		case 'quic':
+			return { type };
+		case 'grpc':
+			return {
+				type,
+				service_name: params.serviceName ?? '',
+				...(params.mode && params.mode !== 'gun' ? { mode: params.mode } : {}),
+				...(params.authority ? { authority: params.authority } : {})
+			};
+		case 'xhttp': {
+			let extra;
+			if (params.extra) {
+				try { extra = JSON.parse(params.extra); } catch (_) { throw new InvalidPayloadError('Invalid XHTTP extra JSON'); }
+			}
+			return { type, path, ...(params.host ? { host: params.host } : {}), ...(params.mode ? { mode: params.mode } : {}), ...(extra ? { extra } : {}) };
+		}
+		default:
+			throw new InvalidPayloadError(`Unsupported transport: ${type}`);
+	}
+}
+
+export function getUniqueParamAlias(params, keys, name) {
+	const present = keys.filter(key => params[key] !== undefined);
+	if (present.length > 1) throw new InvalidPayloadError(`Duplicate ${name} parameters`);
+	return present.length === 1 ? params[present[0]] : undefined;
+}
+
+export function parseBoolParam(value, { fallback, name = 'boolean parameter', values = ['0', '1', 'true', 'false'] } = {}) {
+	if (value === undefined || value === null) return fallback;
+	const text = String(value).trim().toLowerCase();
+	if (!values.map(value => String(value).toLowerCase()).includes(text)) {
+		throw new InvalidPayloadError(`Invalid ${name}: expected a boolean value`);
+	}
+	const parsed = parseBool(value);
+	if (parsed === undefined) throw new InvalidPayloadError(`Invalid ${name}: expected a boolean value`);
+	return parsed;
 }
 
 // Parse boolean value from various formats
 export function parseBool(value, fallback = undefined) {
 	if (value === undefined || value === null) return fallback;
 	if (typeof value === 'boolean') return value;
-	const lowered = String(value).toLowerCase();
+	const lowered = String(value).trim().toLowerCase();
 	if (lowered === 'true' || lowered === '1') return true;
 	if (lowered === 'false' || lowered === '0') return false;
 	return fallback;
-}
-
-// Parse number value safely
-export function parseMaybeNumber(value) {
-	if (value === undefined || value === null) return undefined;
-	const num = Number(value);
-	return Number.isNaN(num) ? undefined : num;
 }
 
 // Parse comma-separated string to array

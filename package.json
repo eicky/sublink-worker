@@ -1,7 +1,17 @@
 {
   "name": "sublink-worker",
-  "version": "2.4.2",
+  "version": "3.0.0",
   "private": true,
+  "description": "A self-hosted, multi-platform proxy subscription converter.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eicky/sublink-worker.git"
+  },
+  "homepage": "https://github.com/eicky/sublink-worker#readme",
+  "bugs": {
+    "url": "https://github.com/eicky/sublink-worker/issues"
+  },
   "type": "module",
   "scripts": {
     "build": "node scripts/build-vercel.mjs",
@@ -10,20 +20,27 @@
     "start": "wrangler dev",
     "test": "vitest run",
     "setup-kv": "node scripts/setup-kv.cjs",
-    "build:node": "node_modules/.bin/esbuild src/platforms/node-server.js --bundle --platform=node --target=node18 --format=cjs --outfile=dist/node-server.cjs",
-    "dev:node": "npm run build:node && node dist/node-server.cjs"
+    "build:node": "esbuild src/platforms/node-server.js --bundle --platform=node --target=node18 --format=cjs --outfile=dist/node-server.cjs",
+    "build:native": "node scripts/build-native.mjs",
+    "dev:node": "npm run build:node && node dist/node-server.cjs",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:check": "npm run docs:build && node scripts/check-docs.mjs",
+    "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.16.8",
     "esbuild": "^0.28.1",
+    "postject": "^1.0.0-alpha.6",
+    "vitepress": "^1.6.4",
     "vitest": "^4.1.7",
     "wrangler": "^4.51.0"
   },
   "dependencies": {
     "esbuild-register": "^3.6.0",
-    "hono": "^4.10.7",
+    "hono": "^4.13.8",
     "ioredis": "^5.8.2",
-    "js-yaml": "^4.1.1"
+    "js-yaml": "^4.3.2"
   },
   "engines": {
     "node": ">=18"

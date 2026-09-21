@@ -1,24 +1,19 @@
-import { parseServerInfo, parseUrlParams, createTlsConfig, createTransportConfig } from '../../utils.js';
+import { parseProxyUri, createTlsConfig, createTransportConfig, parseBool } from '../../utils.js';
 
 export function parseTrojan(url) {
-    const { addressPart, params, name } = parseUrlParams(url);
-    const [password, serverInfo] = addressPart.split('@');
-    const { host, port } = parseServerInfo(serverInfo);
+    const { userinfo, host, port, params, name } = parseProxyUri(url);
+    const tls = createTlsConfig({ ...params, security: params.security ?? 'tls' });
+    const udp = parseBool(params.udp);
 
-    const parsedURL = parseServerInfo(addressPart);
-    // Trojan requires TLS by protocol design
-    if (!params.security) params.security = 'tls';
-    const tls = createTlsConfig(params);
-    const transport = params.type !== 'tcp' ? createTransportConfig(params) : undefined;
     return {
         type: 'trojan',
         tag: name,
         server: host,
         server_port: port,
-        password: decodeURIComponent(password) || parsedURL.username,
-        tcp_fast_open: false,
+        password: decodeURIComponent(userinfo),
+        tcp_fast_open: parseBool(params.tfo, false),
         tls,
-        transport,
-        flow: params.flow ?? undefined
+        transport: createTransportConfig(params),
+        ...(udp !== undefined ? { udp } : {})
     };
 }

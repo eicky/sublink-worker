@@ -32,9 +32,9 @@ describe('AnyTLS protocol support', () => {
             server_port: 8443,
             password: 'p@ss',
             udp: true,
-            'idle-session-check-interval': 30,
-            'idle-session-timeout': 120,
-            'min-idle-session': 5,
+            idle_session_check_interval: 30,
+            idle_session_timeout: 120,
+            min_idle_session: 5,
             tls: {
                 enabled: true,
                 insecure: true,

@@ -68,12 +68,20 @@ Vitest + `@cloudflare/vitest-pool-workers`，配置 `vitest.config.js` 指向 `w
 - 写测试时用 `MemoryKVAdapter` 做 KV，用 `createApp(runtime)` 拿到可测的 Hono app
 - 覆盖：路由、各 builder、各 parser（含 YAML 订阅）、country grouping、selectedRules 向后兼容
 
+### 协议与客户端验收
+
+- 涉及协议 parser、canonical 字段、builder、TLS、传输层、认证或连接语义的改动，默认至少用 **3 个相互独立的官方实现**做差分验收；优先选择固定版本的 Mihomo、sing-box、Xray。协议不被其中某一实现支持时，用协议官方客户端/服务端或真实 Surge App 替代；不得为了凑数量运行与该协议无关的内核。
+- 目标不支持某协议或字段时，必须验证“明确拒绝/不可选择”的边界，并将结果记为 `unsupported`，不能算作连接成功。确实找不到第三个可运行实现时，必须记录缺口，不能声称“已完成三核互通验证”。
+- `mihomo -t`、`sing-box check`、Xray 配置加载只证明 schema/初始化可接受。改动影响握手、TLS、传输、认证、路由或实际连接时，必须增加无 DIRECT fallback 的真实流量探针；记录固定版本、成功、失败、超时和不支持，不能只报告汇总通过数。
+- Surge 输出先按当前[官方手册](https://manual.nssurge.com/)逐字段核对，并用精确的 serializer/parser 回归锁定语法。官方手册滚动更新，验收记录必须注明访问日期和目标 Surge Mac/iOS 版本。Surge 没有公开的跨平台 strict validator；只有在指定版本的 Surge for Mac/iOS 中实际导入或连通后，才可声称“Surge 运行时验证通过”，否则必须明确标注“仅官方文档与静态回归验证”且不把 Surge 计入已运行的三实现数量。
+- 所有公共 fixtures 使用虚构凭据与 `node.example`。真实订阅或节点只能在用户明确授权后用于私有临时互通测试，不得进入 Git、文档、日志或测试快照，完成后清理。
+
 ## 关键约定
 
 - `.jsx` 文件用 Hono JSX runtime，**不是 React**
 - Base64 输入用 `tryDecodeSubscriptionLines()` 处理（同时支持原文和 Base64）
 - 错误用 `ServiceError` 子类（`InvalidPayloadError`、`MissingDependencyError`），返回干净响应
-- i18n：zh-CN / en-US / fa-IR，文件在 `src/i18n/`
+- i18n：zh-CN / en-US / fa / ru，文件在 `src/i18n/`
 
 ## 本地工作流
 
@@ -87,5 +95,5 @@ Vitest + `@cloudflare/vitest-pool-workers`，配置 `vitest.config.js` 指向 `w
 代理工具配置问题查官方文档：
 - sing-box: https://sing-box.sagernet.org/
 - clash/mihomo: https://wiki.metacubex.one/
-- surge: https://blankwonder.gitbooks.io/surge-manual/content/
+- surge: https://manual.nssurge.com/
 - xray: https://xtls.github.io/config/

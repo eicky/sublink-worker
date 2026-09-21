@@ -6,7 +6,7 @@ import { APP_VERSION, GITHUB_REPO, GITHUB_API_RELEASES, DOCS_URL } from '../cons
 export const UpdateChecker = () => {
     const xData = `updateChecker('${APP_VERSION}', '${GITHUB_API_RELEASES}')`;
     const releaseUrl = `${GITHUB_REPO}/releases/latest`;
-    const updateGuideUrl = `${DOCS_URL}/guide/faq#使用-vercel-cloudflare-快速部署按钮后-如何同步上游更新`;
+    const updateGuideUrl = DOCS_URL;
     
     return (
         <div

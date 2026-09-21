@@ -3,6 +3,7 @@ import { deepCopy } from '../../utils.js';
 import { convertYamlProxyToObject } from '../convertYamlProxyToObject.js';
 import { convertSurgeProxyToObject } from '../convertSurgeProxyToObject.js';
 import { convertSurgeIniToJson } from '../../utils/surgeConfigParser.js';
+import { ServiceError } from '../../services/errors.js';
 
 /**
  * Non-proxy outbound types in Sing-Box that should be filtered out from proxies list
@@ -27,7 +28,7 @@ export function parseSingboxJson(content) {
                 o && typeof o === 'object' &&
                 o.server && o.type &&
                 !SINGBOX_NON_PROXY_TYPES.has(o.type)
-            );
+            ).map(o => ({ ...o, tag: o.tag || `${o.server}:${o.server_port ?? o.server_ports?.[0] ?? o.type}` }));
             if (proxies.length > 0) {
                 const configOverrides = deepCopy(parsed);
                 delete configOverrides.outbounds;
@@ -133,7 +134,8 @@ export function parseClashYaml(content) {
             }
         }
     } catch (e) {
-        // Not valid YAML or doesn't have proxies array
+        if (e instanceof ServiceError) throw e;
+        // A syntax mismatch may still be another supported subscription format.
     }
     return null;
 }
@@ -184,6 +186,7 @@ export function parseSurgeIni(content) {
             }
         }
     } catch (e) {
+        if (e instanceof ServiceError) throw e;
         // Not valid Surge INI
         console.warn('Surge INI parsing failed:', e?.message || e);
     }

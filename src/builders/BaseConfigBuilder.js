@@ -2,6 +2,7 @@ import { ProxyParser } from '../parsers/index.js';
 import { createStableProviderName, deepCopy, tryDecodeSubscriptionLines, decodeBase64 } from '../utils.js';
 import { createTranslator } from '../i18n/index.js';
 import { generateRules, getOutbounds, PREDEFINED_RULE_SETS } from '../config/index.js';
+import { ServiceError } from '../services/errors.js';
 
 export class BaseConfigBuilder {
     constructor(inputString, baseConfig, lang, userAgent, groupByCountry = false, includeAutoSelect = true) {
@@ -39,7 +40,7 @@ export class BaseConfigBuilder {
         if (directResult && typeof directResult === 'object' && directResult.type) {
             // It's a parsed config (singboxConfig or yamlConfig)
             if (directResult.config) {
-                this.applyConfigOverrides(directResult.config);
+                this.applyConfigOverrides(directResult.config, directResult.type);
             }
             if (Array.isArray(directResult.proxies)) {
                 for (const proxy of directResult.proxies) {
@@ -52,7 +53,7 @@ export class BaseConfigBuilder {
         }
 
         // If direct parsing didn't work, check for Base64 encoded content
-        const isBase64Like = /^[A-Za-z0-9+/=\r\n]+$/.test(input) && input.replace(/[\r\n]/g, '').length % 4 === 0;
+        const isBase64Like = /^[A-Za-z0-9+/_=\r\n-]+$/.test(input.trim());
         if (isBase64Like) {
             try {
                 const sanitized = input.replace(/\s+/g, '');
@@ -61,7 +62,7 @@ export class BaseConfigBuilder {
                     const decodedResult = parseSubscriptionContent(decodedWhole);
                     if (decodedResult && typeof decodedResult === 'object' && decodedResult.type) {
                         if (decodedResult.config) {
-                            this.applyConfigOverrides(decodedResult.config);
+                            this.applyConfigOverrides(decodedResult.config, decodedResult.type);
                         }
                         if (Array.isArray(decodedResult.proxies)) {
                             for (const proxy of decodedResult.proxies) {
@@ -73,7 +74,9 @@ export class BaseConfigBuilder {
                         }
                     }
                 }
-            } catch (_) { }
+            } catch (error) {
+                if (error instanceof ServiceError) throw error;
+            }
         }
 
         // Otherwise, line-by-line processing (URLs, subscription content, remote lists, etc.)
@@ -100,8 +103,8 @@ export class BaseConfigBuilder {
                                 this.subscriptionUserinfo = subscriptionUserinfo;
                             }
 
-                            // If format is compatible with target client, use as provider
-                            if (this.isCompatibleProviderFormat(format)) {
+                            // Remote providers bypass conversion, so explicit TLS overrides require inline nodes.
+                            if (!this.skipCertVerify && this.isCompatibleProviderFormat(format)) {
                                 this.providerUrls.push(originalUrl);
                                 // Content is already fetched; keep node names so country
                                 // groups can be built over provider members later.
@@ -113,7 +116,7 @@ export class BaseConfigBuilder {
                             const result = parseSubscriptionContent(content);
                             if (result && typeof result === 'object' && (result.type === 'yamlConfig' || result.type === 'singboxConfig' || result.type === 'surgeConfig')) {
                                 if (result.config) {
-                                    this.applyConfigOverrides(result.config);
+                                    this.applyConfigOverrides(result.config, result.type);
                                 }
                                 if (Array.isArray(result.proxies)) {
                                     result.proxies.forEach(proxy => {
@@ -139,6 +142,7 @@ export class BaseConfigBuilder {
                             }
                         }
                     } catch (error) {
+                        if (error instanceof ServiceError) throw error;
                         console.error('Error processing HTTP subscription:', error);
                     }
                     continue;
@@ -149,7 +153,7 @@ export class BaseConfigBuilder {
                 // Handle yamlConfig, singboxConfig, and surgeConfig types (they have the same structure)
                 if (result && typeof result === 'object' && (result.type === 'yamlConfig' || result.type === 'singboxConfig' || result.type === 'surgeConfig')) {
                     if (result.config) {
-                        this.applyConfigOverrides(result.config);
+                        this.applyConfigOverrides(result.config, result.type);
                     }
                     if (Array.isArray(result.proxies)) {
                         result.proxies.forEach(proxy => {
@@ -246,7 +250,7 @@ export class BaseConfigBuilder {
         return descriptors;
     }
 
-    applyConfigOverrides(overrides) {
+    applyConfigOverrides(overrides, sourceFormat) {
         if (!overrides || typeof overrides !== 'object') {
             return;
         }
@@ -257,8 +261,10 @@ export class BaseConfigBuilder {
         // - 'proxy-groups': stored for later intelligent merge (not direct override)
         const blacklistedKeys = new Set(['proxies', 'rules', 'rule-providers', 'proxy-groups']);
 
+        const sameFormat = !sourceFormat || !this.outputFormat || sourceFormat === this.outputFormat;
         Object.entries(overrides).forEach(([key, value]) => {
-            if (blacklistedKeys.has(key)) {
+            // Only proxy groups have a shared representation across client formats.
+            if (!sameFormat || blacklistedKeys.has(key)) {
                 return;
             }
             if (value === undefined) {

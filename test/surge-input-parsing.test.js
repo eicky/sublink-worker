@@ -12,9 +12,9 @@ skip-proxy = 127.0.0.1, localhost
 
 [Proxy]
 HK-SS = ss, hk.example.com, 443, encrypt-method=aes-256-gcm, password=test-password
-US-VMess = vmess, us.example.com, 443, username=12345678-1234-1234-1234-123456789abc, tls=true
+US-VMess = vmess, us.example.com, 443, username=12345678-1234-1234-1234-123456789abc, tls=true, vmess-aead=true
 JP-Trojan = trojan, jp.example.com, 443, password=trojan-password, sni=jp.example.com
-TW-TUIC = tuic, tw.example.com, 443, uuid=tuic-uuid, password=tuic-pass, congestion-controller=bbr
+TW-TUIC = tuic-v5, tw.example.com, 443, uuid=12345678-1234-1234-1234-123456789abc, password=tuic-pass
 SG-HY2 = hysteria2, sg.example.com, 443, password=hy2-password, sni=sg.example.com
 
 [Proxy Group]
@@ -58,14 +58,14 @@ FINAL,DIRECT
             expect(result.tls?.server_name).toBe('trojan.example.com');
         });
 
-        it('should parse TUIC proxy line', () => {
-            const result = convertSurgeProxyToObject('TUIC-Node = tuic, example.com, 443, uuid=my-uuid, password=my-pass, congestion-controller=bbr');
+        it('should parse TUIC v5 proxy line', () => {
+            const result = convertSurgeProxyToObject('TUIC-Node = tuic-v5, example.com, 443, uuid=my-uuid, password=my-pass');
             expect(result).not.toBeNull();
             expect(result.tag).toBe('TUIC-Node');
             expect(result.type).toBe('tuic');
             expect(result.uuid).toBe('my-uuid');
             expect(result.password).toBe('my-pass');
-            expect(result.congestion_control).toBe('bbr');
+            expect(result.congestion_control).toBeUndefined();
         });
 
         it('should parse Hysteria2 proxy line', () => {

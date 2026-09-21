@@ -1,92 +1,91 @@
-import { parseArray, parseBool, parseMaybeNumber } from '../../utils.js';
+import { createTlsConfig, getUniqueParamAlias, parseBoolParam, parseCertificateSha256, parseProxyUri } from '../../utils.js';
+import { InvalidPayloadError } from '../../services/errors.js';
 
-function getFirstParam(searchParams, keys) {
-    for (const key of keys) {
-        if (searchParams.has(key)) {
-            return searchParams.get(key);
-        }
+function parseNonNegativeInteger(value, name, suffix = '') {
+    if (value === undefined) return undefined;
+    const errorMessage = `AnyTLS ${name} must be a non-negative integer${suffix}`;
+    if (!/^\d+$/.test(String(value))) {
+        throw new InvalidPayloadError(errorMessage);
     }
-    return undefined;
+    const result = Number(value);
+    if (!Number.isSafeInteger(result)) {
+        throw new InvalidPayloadError(errorMessage);
+    }
+    return result;
 }
 
-function parseOptionalNumber(value) {
-    if (value === undefined || value === null || String(value).trim() === '') {
-        return undefined;
+function decodePassword(userinfo) {
+    if (userinfo.includes('@') || userinfo.includes(':')) {
+        throw new InvalidPayloadError('AnyTLS password must percent-encode reserved delimiters');
     }
-    const parsed = parseMaybeNumber(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function decodeComponent(value) {
     try {
-        return decodeURIComponent(value);
+        return decodeURIComponent(userinfo);
     } catch (_) {
-        return value;
+        throw new InvalidPayloadError('Invalid AnyTLS password encoding');
     }
 }
 
 export function parseAnytls(url) {
-    const parsedUrl = new URL(url);
-    if (parsedUrl.protocol.toLowerCase() !== 'anytls:') {
-        return undefined;
+    if (typeof url !== 'string' || !/^anytls:\/\//i.test(url)) {
+        throw new InvalidPayloadError('Invalid AnyTLS URI scheme');
     }
 
-    const server = parsedUrl.hostname.startsWith('[') && parsedUrl.hostname.endsWith(']')
-        ? parsedUrl.hostname.slice(1, -1)
-        : parsedUrl.hostname;
-    const port = parsedUrl.port ? parseInt(parsedUrl.port) : 443;
-    const password = decodeComponent(parsedUrl.username);
-    const fragment = decodeComponent(parsedUrl.hash.slice(1));
-    const defaultTagServer = server.includes(':') ? `[${server}]` : server;
-    const params = parsedUrl.searchParams;
-
-    const tls = {
-        enabled: true,
-        insecure: parseBool(
-            getFirstParam(params, ['insecure', 'skip-cert-verify', 'allowInsecure', 'allow_insecure']),
-            false
-        )
-    };
-    const serverName = getFirstParam(params, ['sni', 'servername', 'host']);
-    if (serverName) {
-        tls.server_name = serverName;
+    const { userinfo, host, port, params, fragmentName } = parseProxyUri(url, 443, { requireUserinfo: false });
+    const password = decodePassword(userinfo);
+    if (params.security !== undefined && params.security !== 'tls') {
+        throw new InvalidPayloadError(`Unsupported AnyTLS TLS mode: ${params.security}`);
+    }
+    if (params.ech !== undefined || params.pbk !== undefined || params.sid !== undefined) {
+        throw new InvalidPayloadError('AnyTLS ECH and REALITY URI extensions are not supported');
+    }
+    const unsupportedMaximum = getUniqueParamAlias(params, ['max-idle-session', 'max_idle_session'], 'AnyTLS maximum idle session');
+    if (unsupportedMaximum !== undefined) {
+        throw new InvalidPayloadError('AnyTLS max idle session is not supported by the protocol or target clients');
     }
 
-    // These extensions are emitted by established AnyTLS clients even though
-    // the core URI specification intentionally guarantees only sni/insecure.
-    const alpn = parseArray(getFirstParam(params, ['alpn']));
-    if (alpn) {
-        tls.alpn = alpn;
-    }
-    const fingerprint = getFirstParam(params, ['fp', 'fingerprint', 'client-fingerprint']);
-    if (fingerprint) {
-        tls.utls = {
-            enabled: true,
-            fingerprint
-        };
-    }
-
-    const udp = parseBool(getFirstParam(params, ['udp']));
-    const idleSessionCheckInterval = parseOptionalNumber(
-        getFirstParam(params, ['idle-session-check-interval', 'idle_session_check_interval'])
+    const insecure = parseBoolParam(
+        getUniqueParamAlias(params, ['insecure', 'skip-cert-verify', 'allowInsecure', 'allow_insecure'], 'AnyTLS insecure TLS'),
+        { fallback: false, name: 'AnyTLS insecure flag' }
     );
-    const idleSessionTimeout = parseOptionalNumber(
-        getFirstParam(params, ['idle-session-timeout', 'idle_session_timeout'])
+    const serverName = getUniqueParamAlias(params, ['sni', 'servername', 'host'], 'AnyTLS server name');
+    const clientFingerprint = getUniqueParamAlias(params, ['fp', 'client-fingerprint'], 'AnyTLS client fingerprint');
+    const tls = createTlsConfig({
+        security: 'tls',
+        sni: serverName,
+        insecure,
+        alpn: params.alpn,
+        fp: clientFingerprint
+    });
+    const certificateSha256 = parseCertificateSha256(params.fingerprint, 'AnyTLS fingerprint');
+    if (certificateSha256) tls.certificate_sha256 = certificateSha256;
+
+    const udp = parseBoolParam(params.udp, { fallback: undefined, name: 'AnyTLS UDP flag' });
+    const idleSessionCheckInterval = parseNonNegativeInteger(
+        getUniqueParamAlias(params, ['idle-session-check-interval', 'idle_session_check_interval'], 'AnyTLS idle session check interval'),
+        'idle-session-check-interval',
+        ' number of seconds'
     );
-    const minIdleSession = parseOptionalNumber(
-        getFirstParam(params, ['min-idle-session', 'min_idle_session'])
+    const idleSessionTimeout = parseNonNegativeInteger(
+        getUniqueParamAlias(params, ['idle-session-timeout', 'idle_session_timeout'], 'AnyTLS idle session timeout'),
+        'idle-session-timeout',
+        ' number of seconds'
+    );
+    const minIdleSession = parseNonNegativeInteger(
+        getUniqueParamAlias(params, ['min-idle-session', 'min_idle_session'], 'AnyTLS minimum idle session'),
+        'min-idle-session'
     );
 
+    const displayHost = host.includes(':') ? `[${host}]` : host;
     return {
-        tag: fragment || `AnyTLS ${defaultTagServer}:${port}`,
+        tag: fragmentName || `AnyTLS ${displayHost}:${port}`,
         type: 'anytls',
-        server,
+        server: host,
         server_port: port,
         password,
         ...(udp !== undefined ? { udp } : {}),
-        ...(idleSessionCheckInterval !== undefined ? { 'idle-session-check-interval': idleSessionCheckInterval } : {}),
-        ...(idleSessionTimeout !== undefined ? { 'idle-session-timeout': idleSessionTimeout } : {}),
-        ...(minIdleSession !== undefined ? { 'min-idle-session': minIdleSession } : {}),
+        ...(idleSessionCheckInterval !== undefined ? { idle_session_check_interval: idleSessionCheckInterval } : {}),
+        ...(idleSessionTimeout !== undefined ? { idle_session_timeout: idleSessionTimeout } : {}),
+        ...(minIdleSession !== undefined ? { min_idle_session: minIdleSession } : {}),
         tls
     };
 }

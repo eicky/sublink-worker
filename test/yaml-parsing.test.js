@@ -137,9 +137,9 @@ const testCases = [
                         'tls.insecure': false,
                         'tls.alpn': ['h2', 'http/1.1'],
                         'tls.utls.fingerprint': 'chrome',
-                        'idle-session-check-interval': 30,
-                        'idle-session-timeout': 120,
-                        'min-idle-session': 5
+                        idle_session_check_interval: 30,
+                        idle_session_timeout: 120,
+                        min_idle_session: 5
                     }
                 }
             ]

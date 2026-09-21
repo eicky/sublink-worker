@@ -1,7 +1,8 @@
 import { decodeBase64 } from '../../utils.js';
 import { parseSubscriptionContent } from './subscriptionContentParser.js';
+import { ServiceError } from '../../services/errors.js';
 
-const SUBSCRIPTION_URI_PATTERN = /^(ss|vmess|vless|hysteria|hysteria2|hy2|trojan|tuic|anytls|http|https):\/\//i;
+const SUBSCRIPTION_URI_PATTERN = /^(ss|ssr|vmess|vless|hysteria|hysteria2|hy2|trojan|tuic|anytls|http|https):\/\//i;
 
 function hasSubscriptionUriLine(content) {
     return content
@@ -26,7 +27,8 @@ function isPlainSubscriptionContent(content) {
 
 function decodeUriComponentIfNeeded(text) {
     const trimmed = text.trim();
-    if (!trimmed.includes('%')) {
+    // Decode an envelope, never percent escapes inside an already valid document.
+    if (!trimmed.includes('%') || isPlainSubscriptionContent(trimmed)) {
         return trimmed;
     }
 
@@ -140,6 +142,7 @@ export async function fetchSubscription(url, userAgent) {
 
         return parseSubscriptionContent(decodedText);
     } catch (error) {
+        if (error instanceof ServiceError) throw error;
         console.error('Error fetching or parsing HTTP(S) content:', error);
         return null;
     }

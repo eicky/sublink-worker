@@ -13,7 +13,7 @@ describe('SS Plugin Issue #290', () => {
   - name: 🇭🇰香港
     type: ss
     server: xx.xxxx.com
-    port: 99999
+    port: 8388
     cipher: aes-128-gcm
     password: xxxxxxx-xxxxxxxx-xxxx-xxxxxxx-xxxxxxxxxxxxx
     udp: true
@@ -89,7 +89,7 @@ describe('SS Plugin Issue #290', () => {
   it('should preserve plugin and plugin-opts for SS proxies in inline YAML format (issue #290)', async () => {
     // This is the exact format from issue #290 - inline/flow style YAML
     const input = `proxies:
-  - { name: 🇭🇰香港, type: ss, server: xx.xxxx.com, port: 99999, cipher: aes-128-gcm, password: xxxxxxx-xxxxxxxx-xxxx-xxxxxxx-xxxxxxxxxxxxx, udp: true, plugin: obfs, plugin-opts: { mode: http, host: xxxxxxxxxxxxxxxxxxxxxxxxxx.baidu.com } }`;
+  - { name: 🇭🇰香港, type: ss, server: xx.xxxx.com, port: 8388, cipher: aes-128-gcm, password: xxxxxxx-xxxxxxxx-xxxx-xxxxxxx-xxxxxxxxxxxxx, udp: true, plugin: obfs, plugin-opts: { mode: http, host: xxxxxxxxxxxxxxxxxxxxxxxxxx.baidu.com } }`;
 
     const builder = new ClashConfigBuilder(input, 'minimal', [], null, 'zh-CN', 'test-agent');
     const yamlText = await builder.build();

@@ -5,16 +5,15 @@ import { deepCopy, groupProxiesByCountry } from '../utils.js';
 import { addProxyWithDedup } from './helpers/proxyHelpers.js';
 import { buildSelectorMembers as buildSelectorMemberList, buildNodeSelectMembers, buildCustomRuleMembers, uniqueNames } from './helpers/groupBuilder.js';
 import { normalizeGroupName } from './helpers/groupNameUtils.js';
+import { buildSingboxProxy } from './helpers/singboxProxy.js';
+import { proxyTls } from './helpers/protocolOptions.js';
+import { InvalidConfigError } from '../services/errors.js';
 
 const RULE_SET_HTTP_CLIENT_TAG = 'rule-set-download';
-const ANYTLS_OPTION_KEYS = {
-    'idle-session-check-interval': 'idle_session_check_interval',
-    'idle-session-timeout': 'idle_session_timeout',
-    'min-idle-session': 'min_idle_session'
-};
 
 export class SingboxConfigBuilder extends BaseConfigBuilder {
-    constructor(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry = false, enableClashUI = false, externalController, externalUiDownloadUrl, singboxVersion = '1.12', includeAutoSelect = true) {
+    outputFormat = 'singboxConfig';
+    constructor(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry = false, enableClashUI = false, externalController, externalUiDownloadUrl, singboxVersion = '1.12', includeAutoSelect = true, skipCertVerify = false) {
         const resolvedBaseConfig = baseConfig ?? SING_BOX_CONFIG;
         super(inputString, resolvedBaseConfig, lang, userAgent, groupByCountry, includeAutoSelect);
 
@@ -25,6 +24,7 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
         this.enableClashUI = enableClashUI;
         this.externalController = externalController;
         this.externalUiDownloadUrl = externalUiDownloadUrl;
+        this.skipCertVerify = skipCertVerify;
         this.singboxVersion = singboxVersion;  // '1.11', '1.12' or '1.14'
 
         if (this.config?.dns?.servers?.length > 0) {
@@ -102,80 +102,7 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
     }
 
     convertProxy(proxy) {
-        // Create a shallow copy to avoid mutating the original
-        const sanitized = { ...proxy };
-
-        // URI and Clash inputs use Mihomo's kebab-case names, while sing-box
-        // rejects those keys and requires its native snake_case options.
-        if (sanitized.type === 'anytls') {
-            Object.entries(ANYTLS_OPTION_KEYS).forEach(([sourceKey, targetKey]) => {
-                if (sanitized[sourceKey] !== undefined && sanitized[targetKey] === undefined) {
-                    sanitized[targetKey] = sanitized[sourceKey];
-                }
-                delete sanitized[sourceKey];
-            });
-            // sing-box types the two idle intervals as Duration strings ("30s"),
-            // while share links and Mihomo carry plain seconds
-            ['idle_session_check_interval', 'idle_session_timeout'].forEach((key) => {
-                if (typeof sanitized[key] === 'number') {
-                    sanitized[key] = `${sanitized[key]}s`;
-                }
-            });
-        }
-
-        // Strip Clash-only / mis-typed fields that conflict with sing-box semantics.
-        // `udp` is Clash-only. Top-level `network` in sing-box is a TCP/UDP allowlist
-        // (NetworkList in option/types.go); a stray "tcp" silently disables UDP for
-        // every group that selects this node — including DNS hijack and fakeip.
-        delete sanitized.udp;
-        delete sanitized.network;
-
-        // Remove 'alpn' from root level - it should only exist inside 'tls' object for sing-box
-        // For protocols like vless/vmess, alpn belongs inside the tls configuration
-        if (sanitized.alpn && sanitized.tls) {
-            // Move alpn into tls if tls exists and doesn't have alpn
-            if (!sanitized.tls.alpn) {
-                sanitized.tls = { ...sanitized.tls, alpn: sanitized.alpn };
-            }
-            delete sanitized.alpn;
-        } else if (sanitized.alpn && !sanitized.tls) {
-            // No TLS, remove alpn entirely
-            delete sanitized.alpn;
-        }
-
-        // Remove packet_encoding for now - it's version-specific in sing-box
-        // xudp is default in newer versions
-        delete sanitized.packet_encoding;
-
-        if (sanitized.type === 'hysteria2') {
-            // sing-box names port-hopping/bandwidth fields differently from the
-            // share-link shape, and rejects unknown fields outright
-            if (sanitized.ports) {
-                const ranges = String(sanitized.ports).split(',')
-                    .map(range => range.trim().replace('-', ':'))
-                    .filter(Boolean);
-                if (ranges.length > 0) {
-                    sanitized.server_ports = ranges;
-                }
-                delete sanitized.ports;
-            }
-            if (typeof sanitized.hop_interval === 'number') {
-                sanitized.hop_interval = `${sanitized.hop_interval}s`;
-            }
-            if (sanitized.up !== undefined) {
-                sanitized.up_mbps = sanitized.up;
-                delete sanitized.up;
-            }
-            if (sanitized.down !== undefined) {
-                sanitized.down_mbps = sanitized.down;
-                delete sanitized.down;
-            }
-            delete sanitized.auth;
-            delete sanitized.recv_window_conn;
-            delete sanitized.fast_open;
-        }
-
-        return sanitized;
+        return buildSingboxProxy(proxy, this.singboxVersion, this.skipCertVerify);
     }
 
     addProxyToConfig(proxy) {
@@ -564,6 +491,15 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
     }
 
     formatConfig() {
+        if (this.skipCertVerify) {
+            if (this.config.outbound_providers?.length) {
+                throw new InvalidConfigError('skip_cert_verify cannot be applied to preconfigured outbound providers; inline their nodes first');
+            }
+            // Base-config nodes bypass convertProxy, but must follow the same explicit policy.
+            this.getProxies().forEach(proxy => {
+                if (proxy.tls) proxy.tls = proxyTls(proxy, true);
+            });
+        }
         const rules = generateRules(this.selectedRules, this.customRules);
         const { site_rule_sets, ip_rule_sets } = generateRuleSets(this.selectedRules, this.customRules);
 
